@@ -1,0 +1,18 @@
+
+# Environment variables
+.env
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Virtual environment
+myenv/
+venv/
+
+# Local database
+studymate.db
+*.db
+
+# Secrets
+.streamlit/secrets.toml
