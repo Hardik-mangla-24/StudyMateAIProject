@@ -1,17 +1,18 @@
 
 import os
+import sys
 from pathlib import Path
 from io import BytesIO
 
 import streamlit as st
-
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from gtts import gTTS
 
+
 # ==========================================
-# 1. STREAMLIT CONFIGURATION
+# 1. PROJECT CONFIGURATION
 # ==========================================
 
 st.set_page_config(
@@ -19,6 +20,14 @@ st.set_page_config(
     page_icon="📚",
     layout="wide"
 )
+
+# Project root directory
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# Add project root to Python import path
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 
 # ==========================================
 # 2. BACKEND IMPORTS
@@ -53,17 +62,23 @@ from backend.database import (
 # 3. ENVIRONMENT VARIABLES
 # ==========================================
 
-# Project root folder ka path
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-
-# .env file load karo
 load_dotenv(PROJECT_ROOT / ".env")
 
-# Google Gemini API key read karo
+# First check local environment variable
 api_key = os.getenv("GOOGLE_API_KEY")
 
+# If not found, check Streamlit Cloud Secrets
 if not api_key:
-    st.error("Google API Key not found. Please check your .env file.")
+    try:
+        api_key = st.secrets["GOOGLE_API_KEY"]
+    except (KeyError, FileNotFoundError):
+        api_key = None
+
+if not api_key:
+    st.error(
+        "Google API Key missing. "
+        "Please configure GOOGLE_API_KEY in .env or Streamlit Secrets."
+    )
     st.stop()
 
 
@@ -92,10 +107,8 @@ except Exception as e:
 
 try:
 
-    # Required database tables create karo
     create_tables()
 
-    # Existing database mein user_id column add karo
     migrate_quiz_history()
 
 except Exception as e:
@@ -108,40 +121,25 @@ except Exception as e:
 # 6. SESSION STATE
 # ==========================================
 
-# Application ke temporary session data
 defaults = {
 
     "user": None,
-
     "chunks": [],
-
     "embeddings": [],
-
     "chat_history": [],
-
     "quiz_questions": [],
-
     "quiz_submitted": False,
-
     "quiz_saved": False,
-
     "quiz_version": 0,
-
     "quiz_source": None,
-
     "quiz_score": 0,
-
     "quiz_answers": {},
-
     "pdf_processed": False,
-
     "processed_pdf_name": None,
-
     "voice_language": "English"
 
 }
 
-# Missing session variables initialize karo
 for key, value in defaults.items():
 
     if key not in st.session_state:
@@ -154,7 +152,6 @@ for key, value in defaults.items():
 
 def reset_quiz():
 
-    # Previous quiz ke radio button states delete karo
     keys_to_delete = [
 
         key for key in list(st.session_state.keys())
@@ -166,7 +163,6 @@ def reset_quiz():
     for key in keys_to_delete:
         del st.session_state[key]
 
-    # Quiz states reset karo
     st.session_state.quiz_questions = []
 
     st.session_state.quiz_submitted = False
@@ -177,12 +173,11 @@ def reset_quiz():
 
     st.session_state.quiz_answers = {}
 
-    # Quiz version increase karo
     st.session_state.quiz_version += 1
 
 
 # ==========================================
-# 8. AUTHENTICATION UI
+# 8. AUTHENTICATION PAGE
 # ==========================================
 
 def authentication_page():
@@ -197,13 +192,12 @@ def authentication_page():
 
     st.divider()
 
-    # Login aur Register ke separate tabs
     login_tab, register_tab = st.tabs(
         ["🔐 Login", "📝 Register"]
     )
 
     # --------------------------------------
-    # LOGIN FORM
+    # LOGIN
     # --------------------------------------
 
     with login_tab:
@@ -246,27 +240,22 @@ def authentication_page():
 
                     if user:
 
-                        # Logged-in user ki details session mein save karo
                         st.session_state.user = user
 
                         st.success("Login successful!")
 
-                        # Application reload karo
                         st.rerun()
 
                     else:
 
-                        st.error(
-                            "Invalid email or password."
-                        )
+                        st.error("Invalid email or password.")
 
                 except Exception as e:
 
                     st.error(f"Login Error: {e}")
 
-
     # --------------------------------------
-    # REGISTRATION FORM
+    # REGISTRATION
     # --------------------------------------
 
     with register_tab:
@@ -293,8 +282,7 @@ def authentication_page():
 
             confirm_password = st.text_input(
                 "Confirm Password",
-                type="password",
-                placeholder="Enter password again"
+                type="password"
             )
 
             register_button = st.form_submit_button(
@@ -321,6 +309,10 @@ def authentication_page():
 
                 st.error("Passwords do not match.")
 
+            elif len(register_password) < 8:
+
+                st.warning("Password must contain at least 8 characters.")
+
             else:
 
                 try:
@@ -335,9 +327,7 @@ def authentication_page():
 
                         st.success(message)
 
-                        st.info(
-                            "Your account is ready. Please login."
-                        )
+                        st.info("Please login to continue.")
 
                     else:
 
@@ -349,20 +339,18 @@ def authentication_page():
 
 
 # ==========================================
-# 9. CHECK LOGIN STATUS
+# 9. LOGIN CHECK
 # ==========================================
 
-# Agar user login nahi hai toh authentication page show karo
 if st.session_state.user is None:
 
     authentication_page()
 
-    # Login ke bina baaki application access nahi hoga
     st.stop()
 
 
 # ==========================================
-# 10. LOGGED-IN USER HEADER
+# 10. USER SIDEBAR
 # ==========================================
 
 logged_in_user = st.session_state.user
@@ -377,18 +365,14 @@ st.sidebar.caption(
     logged_in_user["email"]
 )
 
-# Logout button
 if st.sidebar.button(
     "🚪 Logout",
     use_container_width=True
 ):
 
-    # Current user's session data clear karo
     for key in list(st.session_state.keys()):
-
         del st.session_state[key]
 
-    # Login page par wapas jao
     st.rerun()
 
 
@@ -446,13 +430,10 @@ if process_button and uploaded_file is not None:
 
         try:
 
-            # Uploaded PDF ke bytes read karo
             pdf_bytes = uploaded_file.getvalue()
 
-            # PDF se text extract karo
             pdf_text = extract_pdf_text(pdf_bytes)
 
-            # Extracted text ko chunks mein divide karo
             chunks = split_text(
                 pdf_text,
                 chunk_size=1000,
@@ -464,7 +445,6 @@ if process_button and uploaded_file is not None:
                 st.error("No readable text found in PDF.")
                 st.stop()
 
-            # PDF chunks ke embeddings create karo
             embeddings = create_embeddings(
                 client,
                 chunks
@@ -476,7 +456,6 @@ if process_button and uploaded_file is not None:
                     "PDF chunks and embeddings do not match."
                 )
 
-            # Session state mein PDF data save karo
             st.session_state.chunks = chunks
 
             st.session_state.embeddings = embeddings
@@ -487,7 +466,6 @@ if process_button and uploaded_file is not None:
 
             st.session_state.processed_pdf_name = current_pdf_name
 
-            # Old chat aur quiz clear karo
             st.session_state.chat_history = []
 
             reset_quiz()
@@ -522,6 +500,12 @@ if st.session_state.pdf_processed and st.session_state.chunks:
 # 15. VOICE SETTINGS
 # ==========================================
 
+language_instruction = """
+Answer in simple English suitable for a student.
+"""
+
+voice_code = "en"
+
 if st.session_state.chunks:
 
     st.header("🔊 Voice Settings")
@@ -546,14 +530,6 @@ if st.session_state.chunks:
 
         voice_code = "hi"
 
-    else:
-
-        language_instruction = """
-        Answer in simple English suitable for a student.
-        """
-
-        voice_code = "en"
-
     st.divider()
 
 
@@ -569,7 +545,6 @@ if st.session_state.chunks:
         "Ask questions related to your uploaded study material."
     )
 
-    # Previous chat messages display karo
     for index, message in enumerate(
         st.session_state.chat_history
     ):
@@ -578,7 +553,6 @@ if st.session_state.chunks:
 
             st.markdown(message["content"])
 
-            # Assistant ke answer ko voice mein suno
             if message["role"] == "assistant":
 
                 if st.button(
@@ -613,9 +587,8 @@ if st.session_state.chunks:
                             f"Voice generation failed: {e}"
                         )
 
-
     # --------------------------------------
-    # STUDENT QUESTION INPUT
+    # QUESTION FORM
     # --------------------------------------
 
     with st.form(
@@ -635,7 +608,6 @@ if st.session_state.chunks:
 
     if send_question and user_question.strip():
 
-        # User ka question chat history mein add karo
         st.session_state.chat_history.append({
             "role": "user",
             "content": user_question
@@ -645,7 +617,6 @@ if st.session_state.chunks:
 
             with st.spinner("StudyMate AI is thinking..."):
 
-                # PDF se relevant chunks search karo
                 relevant_chunks = search_relevant_chunks(
                     client,
                     user_question,
@@ -654,10 +625,8 @@ if st.session_state.chunks:
                     top_k=4
                 )
 
-                # Relevant chunks ko ek context mein combine karo
                 context = "\n\n".join(relevant_chunks)
 
-                # Gemini ke liye prompt create karo
                 prompt = f"""
 You are StudyMate AI, a helpful educational assistant.
 
@@ -682,7 +651,6 @@ STUDENT QUESTION:
 ANSWER:
 """
 
-                # Gemini se answer generate karo
                 response = client.models.generate_content(
                     model="gemini-2.5-flash",
                     contents=prompt
@@ -691,10 +659,8 @@ ANSWER:
                 answer = response.text
 
                 if not answer:
-
                     answer = "Sorry, I could not generate an answer."
 
-                # Assistant ka answer history mein save karo
                 st.session_state.chat_history.append({
                     "role": "assistant",
                     "content": answer
@@ -706,8 +672,6 @@ ANSWER:
 
             st.error(f"Chat Error: {e}")
 
-
-    # Clear chat history
     if st.button("🗑️ Clear Chat"):
 
         st.session_state.chat_history = []
@@ -744,7 +708,6 @@ if st.session_state.chunks:
 
             try:
 
-                # PDF chunks se quiz generate karo
                 questions = generate_quiz(
                     client,
                     st.session_state.chunks,
@@ -802,11 +765,9 @@ if st.session_state.quiz_questions:
                     f"### Q{i + 1}. {question['question']}"
                 )
 
-                options = question["options"]
-
                 st.radio(
                     "Choose your answer:",
-                    options=options,
+                    options=question["options"],
                     index=None,
                     key=f"quiz_answer_{quiz_version}_{i}"
                 )
@@ -826,9 +787,7 @@ if st.session_state.quiz_questions:
 
             for i, question in enumerate(questions):
 
-                answer_key = (
-                    f"quiz_answer_{quiz_version}_{i}"
-                )
+                answer_key = f"quiz_answer_{quiz_version}_{i}"
 
                 selected_answer = st.session_state.get(
                     answer_key
@@ -859,9 +818,7 @@ if st.session_state.quiz_questions:
 
                     correct_index = question["answer"]
 
-                    correct_text = question["options"][
-                        correct_index
-                    ]
+                    correct_text = question["options"][correct_index]
 
                     if (
                         selected_answer.strip().lower()
@@ -873,10 +830,6 @@ if st.session_state.quiz_questions:
                 st.session_state.quiz_answers = selected_answers
 
                 st.session_state.quiz_score = score
-
-                # --------------------------------------
-                # SAVE RESULT FOR CURRENT USER
-                # --------------------------------------
 
                 if not st.session_state.quiz_saved:
 
@@ -920,9 +873,7 @@ if (
 
     total_questions = len(questions)
 
-    percentage = (
-        score / total_questions
-    ) * 100
+    percentage = (score / total_questions) * 100
 
     st.success("Quiz submitted successfully!")
 
@@ -955,27 +906,19 @@ if (
 
     if percentage == 100:
 
-        st.success(
-            "Excellent! Great performance! 🎉"
-        )
+        st.success("Excellent! Great performance! 🎉")
 
     elif percentage >= 70:
 
-        st.success(
-            "Great job! Keep practicing. 🌟"
-        )
+        st.success("Great job! Keep practicing. 🌟")
 
     elif percentage >= 40:
 
-        st.warning(
-            "Good effort! Review your answers."
-        )
+        st.warning("Good effort! Review your answers.")
 
     else:
 
-        st.info(
-            "Keep learning. You will improve!"
-        )
+        st.info("Keep learning. You will improve!")
 
     st.divider()
 
@@ -983,9 +926,7 @@ if (
 
     for i, question in enumerate(questions):
 
-        correct_text = question["options"][
-            question["answer"]
-        ]
+        correct_text = question["options"][question["answer"]]
 
         user_answer = st.session_state.quiz_answers.get(
             i,
@@ -996,13 +937,9 @@ if (
             f"### Q{i + 1}. {question['question']}"
         )
 
-        st.write(
-            f"**Your answer:** {user_answer}"
-        )
+        st.write(f"**Your answer:** {user_answer}")
 
-        st.write(
-            f"**Correct answer:** {correct_text}"
-        )
+        st.write(f"**Correct answer:** {correct_text}")
 
         if (
             str(user_answer).strip().lower()
@@ -1015,16 +952,11 @@ if (
 
             st.error("Incorrect answer ❌")
 
-        explanation = question.get(
-            "explanation",
-            ""
-        )
+        explanation = question.get("explanation", "")
 
         if explanation:
 
-            st.info(
-                f"💡 Explanation: {explanation}"
-            )
+            st.info(f"💡 Explanation: {explanation}")
 
         st.divider()
 
@@ -1043,7 +975,6 @@ st.header("📊 My Learning Dashboard")
 
 try:
 
-    # Sirf logged-in user ki quiz history fetch karo
     history = get_quiz_history(
         logged_in_user["id"]
     )
@@ -1062,9 +993,7 @@ try:
             for row in history_data
         ]
 
-        average_score = (
-            sum(percentages) / total_quizzes
-        )
+        average_score = sum(percentages) / total_quizzes
 
         highest_score = max(percentages)
 
@@ -1127,9 +1056,7 @@ try:
 
 except Exception as e:
 
-    st.error(
-        f"Dashboard Error: {e}"
-    )
+    st.error(f"Dashboard Error: {e}")
 
 
 # ==========================================
